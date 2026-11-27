@@ -4,19 +4,125 @@ import type { ParsedResumeData } from "@/db/schema";
 import { WORK_CATEGORIES, COMMON_ROLES } from "./constants";
 import { traceSlowOperation, withTimeout } from "./telemetry";
 
-const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+export const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
+export const FALLBACK_GEMINI_MODEL = "gemini-3-flash-preview";
 
-function getGeminiClient(): GoogleGenAI {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error(
-      "GEMINI_API_KEY is missing. Add your Gemini API key from Google AI Studio to .env.local."
-    );
+export interface GeminiTarget {
+  slot: number;
+  apiKey: string;
+  model: string;
+}
+
+export function getGeminiApiKeys(): string[] {
+  const candidates = [
+    process.env.GEMINI_API_KEY,
+    process.env.GEMINI_API_KEY_FALLBACK,
+    process.env.GEMINI_API_KEY_2,
+  ];
+  const seen = new Set<string>();
+  const keys: string[] = [];
+  for (const raw of candidates) {
+    const k = raw?.trim();
+    if (k && !seen.has(k)) {
+      seen.add(k);
+      keys.push(k);
+    }
   }
+  return keys;
+}
+
+export function getGeminiFailoverTargets(): GeminiTarget[] {
+  const keys = getGeminiApiKeys();
+  const targets: GeminiTarget[] = [];
+  if (keys[0]) {
+    targets.push({ slot: 1, apiKey: keys[0], model: DEFAULT_GEMINI_MODEL });
+  }
+  for (let i = 1; i < keys.length; i++) {
+    targets.push({ slot: i + 1, apiKey: keys[i], model: FALLBACK_GEMINI_MODEL });
+    targets.push({ slot: i + 1, apiKey: keys[i], model: DEFAULT_GEMINI_MODEL });
+  }
+  if (keys[0]) {
+    targets.push({ slot: 1, apiKey: keys[0], model: FALLBACK_GEMINI_MODEL });
+  }
+  return targets;
+}
+
+export function isRetryableGeminiError(error: unknown): boolean {
+  const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  const status =
+    typeof error === "object" && error !== null && "status" in error
+      ? Number((error as { status?: unknown }).status)
+      : NaN;
+
+  if (status === 404 || status === 429 || status >= 500) return true;
+  return (
+    msg.includes("404") ||
+    msg.includes("no longer available") ||
+    msg.includes("429") ||
+    msg.includes("500") ||
+    msg.includes("502") ||
+    msg.includes("503") ||
+    msg.includes("504") ||
+    msg.includes("high demand") ||
+    msg.includes("overloaded") ||
+    msg.includes("unavailable") ||
+    msg.includes("resource_exhausted") ||
+    msg.includes("quota") ||
+    msg.includes("rate limit") ||
+    msg.includes("timed out") ||
+    msg.includes("timeout") ||
+    msg.includes("econnreset") ||
+    msg.includes("fetch failed")
+  );
+}
+
+function createGeminiClient(apiKey: string): GoogleGenAI {
   return new GoogleGenAI({
     apiKey,
     httpOptions: { apiVersion: "v1beta" },
   });
+}
+
+export async function withGeminiFailover<T>(
+  operation: (ai: GoogleGenAI, model: string, keySlot: number) => Promise<T>,
+  overrideTargets?: Array<{ client: GoogleGenAI; model: string; slot?: number }>
+): Promise<T> {
+  const resolved =
+    overrideTargets && overrideTargets.length > 0
+      ? overrideTargets.map((t, idx) => ({
+          client: t.client,
+          model: t.model,
+          slot: t.slot ?? idx + 1,
+        }))
+      : getGeminiFailoverTargets().map((t) => ({
+          client: createGeminiClient(t.apiKey),
+          model: t.model,
+          slot: t.slot,
+        }));
+
+  if (resolved.length === 0) {
+    throw new Error(
+      "GEMINI_API_KEY is missing. Add your Gemini API key from Google AI Studio to .env.local."
+    );
+  }
+
+  let lastError: unknown;
+  for (let i = 0; i < resolved.length; i++) {
+    const target = resolved[i];
+    try {
+      return await operation(target.client, target.model, target.slot);
+    } catch (err) {
+      lastError = err;
+      const hasNext = i < resolved.length - 1;
+      if (!hasNext || !isRetryableGeminiError(err)) {
+        throw err;
+      }
+      console.warn(
+        `[gemini] Key #${target.slot} (${target.model}) failed (${err instanceof Error ? err.message.slice(0, 120) : "error"}); failing over to next target.`
+      );
+    }
+  }
+  throw lastError;
 }
 
 const parsedResumeSchema = z.object({
@@ -90,7 +196,6 @@ function extractJsonObject(raw: string): unknown {
 }
 
 async function generateJsonWithRetry(
-  ai: GoogleGenAI,
   operationName: string,
   contents: string | Array<string | { inlineData: { mimeType: string; data: string } }>,
   timeoutMs: number,
@@ -104,15 +209,17 @@ async function generateJsonWithRetry(
         ? [...contents, "\nIMPORTANT: Return strictly valid RFC 8259 JSON with properly escaped quotes and commas."]
         : `${contents}\nIMPORTANT: Return strictly valid RFC 8259 JSON with properly escaped quotes and commas.`;
 
-    const response = await traceSlowOperation(operationName, () =>
-      withTimeout(
-        ai.models.generateContent({
-          model: DEFAULT_GEMINI_MODEL,
-          contents: finalContents,
-          config: { responseMimeType: "application/json" },
-        }),
-        timeoutMs,
-        label
+    const response = await withGeminiFailover((ai, model) =>
+      traceSlowOperation(operationName, () =>
+        withTimeout(
+          ai.models.generateContent({
+            model,
+            contents: finalContents,
+            config: { responseMimeType: "application/json" },
+          }),
+          timeoutMs,
+          label
+        )
       )
     );
     try {
@@ -129,7 +236,6 @@ export async function parseResumeWithAI(input: {
   fileBuffer?: Buffer;
   mimeType?: string;
 }): Promise<{ parsed: ParsedResumeData; extractedText: string }> {
-  const ai = getGeminiClient();
   const needsTranscript = input.rawText.trim().length < 200;
 
   const prompt = `You are Wave Tech's career-agent resume parser.
@@ -182,7 +288,6 @@ Return ONLY valid JSON matching this schema:
   );
 
   const rawObj = await generateJsonWithRetry(
-    ai,
     "gemini_parse_resume",
     contents,
     45000,
@@ -201,13 +306,9 @@ export async function reviewResumeWithAI(input: {
   resumeText: string;
   targetRoles: string[];
 }): Promise<{ summary: string; strengths: string[]; improvements: string[] }> {
-  const ai = getGeminiClient();
-
-  const response = await traceSlowOperation("gemini_review_resume", () =>
-    withTimeout(
-      ai.models.generateContent({
-        model: DEFAULT_GEMINI_MODEL,
-        contents: `You are Wave Tech's career coach. Review this candidate resume honestly for target roles (${input.targetRoles.join(", ") || "software & AI"}).
+  const obj = (await generateJsonWithRetry(
+    "gemini_review_resume",
+    `You are Wave Tech's career coach. Review this candidate resume honestly for target roles (${input.targetRoles.join(", ") || "software & AI"}).
 Return ONLY JSON:
 {
   "summary": "2-sentence crisp assessment",
@@ -217,14 +318,9 @@ Return ONLY JSON:
 
 Resume:
 ${input.resumeText.slice(0, 18000)}`,
-        config: { responseMimeType: "application/json" },
-      }),
-      35000,
-      "Gemini resume review"
-    )
-  );
-
-  const obj = extractJsonObject(response.text || "{}") as {
+    35000,
+    "Gemini resume review"
+  )) as {
     summary?: string;
     strengths?: string[];
     improvements?: string[];
@@ -370,8 +466,6 @@ export async function tailorResumeWithAI(input: {
   tailorNotes: string;
   matchedKeywords: string[];
 }> {
-  const ai = getGeminiClient();
-
   const intensityInstruction =
     input.intensity === "light"
       ? "Light edit: keep experience bullets almost identical; optimize headline, competency pills, skill category ordering, and surface JD-matching evidence cleanly."
@@ -380,7 +474,6 @@ export async function tailorResumeWithAI(input: {
       : "Balanced tailor: refine headline, 3-line summary, competencies, and top project/experience bullets using honest JD-aligned framing.";
 
   const obj = (await generateJsonWithRetry(
-    ai,
     "gemini_tailor_resume",
     `You are Wave Tech's ATS-optimized resume architect (following strict factual integrity & 6-second recruiter scan rules).
 STRICT FACT GATE:
@@ -524,8 +617,6 @@ export async function runCandidateChatAgent(input: {
   targetJobId?: string;
   followUpPrompt?: string;
 }> {
-  const ai = getGeminiClient();
-
   const recentHistory = input.history
     .slice(-8)
     .map((m) => `${m.role === "user" ? "Candidate" : "Wave Tech"}: ${m.content}`)
@@ -579,19 +670,12 @@ Return ONLY valid JSON:
   "followUpPrompt": "optional short suggested next prompt like 'Help me prepare for the ... interview'"
 }`;
 
-  const response = await traceSlowOperation("gemini_chat_agent", () =>
-    withTimeout(
-      ai.models.generateContent({
-        model: DEFAULT_GEMINI_MODEL,
-        contents: prompt,
-        config: { responseMimeType: "application/json" },
-      }),
-      30000,
-      "Gemini chat response"
-    )
-  );
-
-  const obj = extractJsonObject(response.text || "{}") as {
+  const obj = (await generateJsonWithRetry(
+    "gemini_chat_agent",
+    prompt,
+    30000,
+    "Gemini chat response"
+  )) as {
     reply?: string;
     action?: "none" | "show_picks" | "ask_tailor_role" | "show_tailor_card" | "show_review" | "show_apply_picker";
     targetJobId?: string;
@@ -618,7 +702,13 @@ export async function* streamChatReplyWithAI(input: {
     skills: string[];
   } | null;
 }): AsyncGenerator<string> {
-  const ai = getGeminiClient();
+  const targets = getGeminiFailoverTargets();
+  if (targets.length === 0) {
+    throw new Error(
+      "GEMINI_API_KEY is missing. Add your Gemini API key from Google AI Studio to .env.local."
+    );
+  }
+
   const recentHistory = input.history
     .slice(-8)
     .map((m) => `${m.role === "user" ? "Candidate" : "Wave Tech"}: ${m.content}`)
@@ -628,24 +718,46 @@ export async function* streamChatReplyWithAI(input: {
     ? `\nFocused job: ${input.focusedJob.title} at ${input.focusedJob.companyName}\nSkills: ${input.focusedJob.skills.join(", ")}\nDescription: ${input.focusedJob.description.slice(0, 1200)}`
     : "";
 
-  const stream = await withTimeout(
-    ai.models.generateContentStream({
-      model: DEFAULT_GEMINI_MODEL,
-      contents: `You are Wave Tech, a crisp, helpful AI career coach. Keep replies concise, practical, and tailored to ${input.candidateName}.
+  const prompt = `You are Wave Tech, a crisp, helpful AI career coach. Keep replies concise, practical, and tailored to ${input.candidateName}.
 Profile: ${input.profileSummary}${focusedContext}
 
 Recent conversation:
 ${recentHistory}
 
-Candidate: ${input.userMessage}`,
-    }),
-    30000,
-    "Gemini chat stream"
-  );
+Candidate: ${input.userMessage}`;
 
-  for await (const chunk of stream) {
-    if (chunk.text) {
-      yield chunk.text;
+  let lastError: unknown;
+  for (let i = 0; i < targets.length; i++) {
+    const target = targets[i];
+    const ai = createGeminiClient(target.apiKey);
+    let emittedAnyChunk = false;
+    try {
+      const stream = await withTimeout(
+        ai.models.generateContentStream({
+          model: target.model,
+          contents: prompt,
+        }),
+        30000,
+        "Gemini chat stream"
+      );
+
+      for await (const chunk of stream) {
+        if (chunk.text) {
+          emittedAnyChunk = true;
+          yield chunk.text;
+        }
+      }
+      return;
+    } catch (err) {
+      lastError = err;
+      const hasNext = i < targets.length - 1;
+      if (emittedAnyChunk || !hasNext || !isRetryableGeminiError(err)) {
+        throw err;
+      }
+      console.warn(
+        `[gemini] Stream key #${target.slot} (${target.model}) failed (${err instanceof Error ? err.message.slice(0, 120) : "error"}); failing over to next target.`
+      );
     }
   }
+  throw lastError;
 }
