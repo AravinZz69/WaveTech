@@ -203,6 +203,125 @@ ${input.resumeText.slice(0, 18000)}`,
   };
 }
 
+export interface TailoredCvPayload {
+  pageFormat?: "a4" | "letter";
+  candidate: {
+    name: string;
+    headline?: string;
+    location?: string;
+    phone?: string;
+    email?: string;
+    linkedin?: string;
+    github?: string;
+    portfolio?: string;
+  };
+  summary: string;
+  competencies: string[];
+  experience: Array<{
+    company: string;
+    role: string;
+    location?: string;
+    dates: string;
+    bullets: string[];
+  }>;
+  projects: Array<{
+    name: string;
+    badge?: string;
+    tech?: string;
+    url?: string;
+    bullets: string[];
+  }>;
+  education: Array<{
+    title: string;
+    org: string;
+    location?: string;
+    year: string;
+    description?: string;
+  }>;
+  certifications: Array<{
+    title: string;
+    org?: string;
+    year?: string;
+  }>;
+  awards: Array<{
+    title: string;
+    org?: string;
+    year?: string;
+  }>;
+  skills: Array<{
+    category?: string;
+    items: string;
+  }>;
+}
+
+function formatStructuredCvMarkdown(cv: TailoredCvPayload): string {
+  const lines: string[] = [];
+  lines.push(`# ${cv.candidate.name}`);
+  if (cv.candidate.headline) lines.push(cv.candidate.headline);
+  const contact = [
+    cv.candidate.location,
+    cv.candidate.phone,
+    cv.candidate.email,
+    cv.candidate.linkedin,
+    cv.candidate.github,
+    cv.candidate.portfolio,
+  ].filter(Boolean);
+  if (contact.length > 0) lines.push(contact.join(" | "));
+  lines.push("");
+
+  if (cv.summary) {
+    lines.push("## Professional Summary", cv.summary, "");
+  }
+  if (cv.competencies.length > 0) {
+    lines.push("## Core Competencies", cv.competencies.join(" · "), "");
+  }
+  if (cv.experience.length > 0) {
+    lines.push("## Work Experience");
+    for (const exp of cv.experience) {
+      lines.push(`### ${exp.company} — ${exp.role} (${exp.dates}${exp.location ? ` · ${exp.location}` : ""})`);
+      for (const b of exp.bullets) lines.push(`- ${b}`);
+      lines.push("");
+    }
+  }
+  if (cv.projects.length > 0) {
+    lines.push("## Technical Projects");
+    for (const proj of cv.projects) {
+      lines.push(`### ${proj.name}${proj.badge ? ` | ${proj.badge}` : ""}${proj.tech ? ` (${proj.tech})` : ""}`);
+      for (const b of proj.bullets) lines.push(`- ${b}`);
+      lines.push("");
+    }
+  }
+  if (cv.education.length > 0) {
+    lines.push("## Education");
+    for (const edu of cv.education) {
+      lines.push(`- **${edu.title}** — ${edu.org}${edu.year ? ` (${edu.year})` : ""}`);
+    }
+    lines.push("");
+  }
+  if (cv.certifications.length > 0) {
+    lines.push("## Certifications");
+    for (const cert of cv.certifications) {
+      lines.push(`- ${cert.title}${cert.org ? ` — ${cert.org}` : ""}${cert.year ? ` (${cert.year})` : ""}`);
+    }
+    lines.push("");
+  }
+  if (cv.awards.length > 0) {
+    lines.push("## Awards & Honors");
+    for (const aw of cv.awards) {
+      lines.push(`- ${aw.title}${aw.org ? ` — ${aw.org}` : ""}${aw.year ? ` (${aw.year})` : ""}`);
+    }
+    lines.push("");
+  }
+  if (cv.skills.length > 0) {
+    lines.push("## Technical Skills");
+    for (const sk of cv.skills) {
+      lines.push(sk.category ? `- **${sk.category}:** ${sk.items}` : `- ${sk.items}`);
+    }
+  }
+
+  return lines.join("\n").trim();
+}
+
 export async function tailorResumeWithAI(input: {
   resumeText: string;
   jobTitle: string;
@@ -210,21 +329,34 @@ export async function tailorResumeWithAI(input: {
   jobDescription: string;
   jobSkills: string[];
   intensity: "light" | "balanced" | "deep";
-}): Promise<{ tailoredText: string; tailorNotes: string; matchedKeywords: string[] }> {
+  candidateFallbackName?: string;
+}): Promise<{
+  tailoredText: string;
+  structuredCv: TailoredCvPayload | null;
+  tailorNotes: string;
+  matchedKeywords: string[];
+}> {
   const ai = getGeminiClient();
 
   const intensityInstruction =
     input.intensity === "light"
-      ? "Light edit: keep structure and wording almost identical, only reorder skills and subtly align keywords."
+      ? "Light edit: keep experience bullets almost identical; optimize headline, competency pills, skill category ordering, and surface JD-matching evidence cleanly."
       : input.intensity === "deep"
-      ? "Deep tailor: rewrite summary and bullet phrasing heavily to foreground relevant experience and measurable impact for this exact job without inventing false experience."
-      : "Balanced tailor: refine headline, summary, skills order, and top project/experience bullets for this role without fabricating facts.";
+      ? "Deep tailor: rewrite summary and bullet phrasing using the exact JD vocabulary to foreground directly relevant systems and quantified impact without fabricating anything."
+      : "Balanced tailor: refine headline, 3-line summary, competencies, and top project/experience bullets using honest JD-aligned framing.";
 
   const response = await traceSlowOperation("gemini_tailor_resume", () =>
     withTimeout(
       ai.models.generateContent({
         model: DEFAULT_GEMINI_MODEL,
-        contents: `You are Wave Tech's resume tailoring engine. NEVER fabricate employers, degrees, metrics, or skills the candidate does not have.
+        contents: `You are Wave Tech's ATS-optimized resume architect (following strict factual integrity & 6-second recruiter scan rules).
+STRICT FACT GATE:
+- NEVER invent employers, titles, dates, degrees, certifications, metrics, numbers, or skills absent from the Candidate Original Resume.
+- Only reformulate verified experience using JD vocabulary (e.g., bold key verified numbers/metrics using **40%** or **sub-200ms**).
+- Drop empty optional sections rather than inventing placeholders.
+- Keep bullet points punchy (1-2 lines max each, action-verb + system + quantified outcome) so the tailored resume fits crisply in 1 tight page (or balanced 2 pages for extensive experience) without dangling lines.
+- Pick pageFormat: "letter" if the job is US/Canada, otherwise "a4".
+
 ${intensityInstruction}
 
 Target Role: ${input.jobTitle} at ${input.companyName}
@@ -237,9 +369,52 @@ ${input.resumeText.slice(0, 16000)}
 
 Return ONLY valid JSON:
 {
-  "tailoredText": "Complete tailored resume in clean Markdown format ready to view/copy",
-  "tailorNotes": "Short 2-3 sentence summary of what was tailored and why",
-  "matchedKeywords": ["list of job keywords highlighted"]
+  "structuredCv": {
+    "pageFormat": "a4",
+    "candidate": {
+      "name": "Full name from resume",
+      "headline": "Sharp 4-8 word target headline aligned to role",
+      "location": "City, Country",
+      "phone": "Phone if in resume",
+      "email": "Email if in resume",
+      "linkedin": "LinkedIn URL or handle if in resume",
+      "github": "GitHub URL or handle if in resume",
+      "portfolio": "Portfolio URL if in resume"
+    },
+    "summary": "Crisp 3-line tailored summary answering target role fit + strongest verified proof (use **bold** for 2-3 key metrics/phrases).",
+    "competencies": ["6 to 8 high-signal verified JD competency phrases from candidate background"],
+    "experience": [
+      {
+        "company": "Company Name",
+        "role": "Role Title",
+        "location": "Remote or City",
+        "dates": "Mon YYYY - Mon YYYY",
+        "bullets": ["Outcome-driven bullet with **bolded** verified metric"]
+      }
+    ],
+    "projects": [
+      {
+        "name": "Project Name",
+        "badge": "Short tag like Production System",
+        "tech": "Comma-separated verified stack",
+        "bullets": ["1-2 crisp impact bullets with **bolded** verified metric"]
+      }
+    ],
+    "education": [
+      { "title": "Degree", "org": "Institution", "location": "City", "year": "2024 - 2028", "description": "" }
+    ],
+    "certifications": [
+      { "title": "Certification name", "org": "Issuer", "year": "2025" }
+    ],
+    "awards": [
+      { "title": "Award or Hackathon Win", "org": "Event", "year": "2025" }
+    ],
+    "skills": [
+      { "category": "Category", "items": "Comma-separated verified skills prioritized for JD" }
+    ]
+  },
+  "tailorNotes": "Short 2-3 sentence summary of what was tailored, top matched keywords, and any real skill gaps.",
+  "matchedKeywords": ["list of verified JD keywords highlighted"]
 }`,
         config: { responseMimeType: "application/json" },
       }),
@@ -249,13 +424,45 @@ Return ONLY valid JSON:
   );
 
   const obj = extractJsonObject(response.text || "{}") as {
+    structuredCv?: Partial<TailoredCvPayload>;
     tailoredText?: string;
     tailorNotes?: string;
     matchedKeywords?: string[];
   };
 
+  let structuredCv: TailoredCvPayload | null = null;
+  if (obj.structuredCv && obj.structuredCv.candidate?.name) {
+    const raw = obj.structuredCv;
+    structuredCv = {
+      pageFormat: raw.pageFormat === "letter" ? "letter" : "a4",
+      candidate: {
+        name: raw.candidate?.name || input.candidateFallbackName || "Candidate",
+        headline: raw.candidate?.headline,
+        location: raw.candidate?.location,
+        phone: raw.candidate?.phone,
+        email: raw.candidate?.email,
+        linkedin: raw.candidate?.linkedin,
+        github: raw.candidate?.github,
+        portfolio: raw.candidate?.portfolio,
+      },
+      summary: typeof raw.summary === "string" ? raw.summary : "",
+      competencies: Array.isArray(raw.competencies) ? raw.competencies.slice(0, 8) : [],
+      experience: Array.isArray(raw.experience) ? raw.experience : [],
+      projects: Array.isArray(raw.projects) ? raw.projects.slice(0, 4) : [],
+      education: Array.isArray(raw.education) ? raw.education : [],
+      certifications: Array.isArray(raw.certifications) ? raw.certifications : [],
+      awards: Array.isArray(raw.awards) ? raw.awards : [],
+      skills: Array.isArray(raw.skills) ? raw.skills : [],
+    };
+  }
+
+  const tailoredText = structuredCv
+    ? formatStructuredCvMarkdown(structuredCv)
+    : obj.tailoredText || input.resumeText;
+
   return {
-    tailoredText: obj.tailoredText || input.resumeText,
+    tailoredText,
+    structuredCv,
     tailorNotes: obj.tailorNotes || `Tailored for ${input.jobTitle} at ${input.companyName}.`,
     matchedKeywords: Array.isArray(obj.matchedKeywords) ? obj.matchedKeywords : [],
   };

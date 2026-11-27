@@ -65,6 +65,7 @@ export async function POST(req: NextRequest) {
       jobDescription: job.description,
       jobSkills: job.skills,
       intensity,
+      candidateFallbackName: sourceResume.parsedJson?.fullName || session.user.name,
     });
 
     const title = `${job.title} — ${job.companyName}`;
@@ -72,6 +73,7 @@ export async function POST(req: NextRequest) {
     const pdfBuffer = await generateTailoredResumePdf({
       title,
       tailoredText: tailored.tailoredText,
+      structuredCv: tailored.structuredCv,
       candidateName: sourceResume.parsedJson?.fullName || session.user.name,
       companyName: job.companyName,
       jobTitle: job.title,
