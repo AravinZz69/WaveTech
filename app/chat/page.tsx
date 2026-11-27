@@ -6,6 +6,7 @@ import { getServerSession } from "@/lib/session";
 import { getDb, schema } from "@/db";
 import { ensureFreshJobsCatalog } from "@/lib/job-sync";
 import { scoreJobForCandidate } from "@/lib/matching";
+import { publicResumeSelect } from "@/lib/resume-queries";
 import { CandidateWorkspace } from "@/components/workspace/CandidateWorkspace";
 
 export const dynamic = "force-dynamic";
@@ -59,21 +60,7 @@ export default async function ChatPage() {
 
   const [userResumes, allJobs, appRows, messages, historyRows, pendingCount] = await Promise.all([
     db
-      .select({
-        id: schema.resumes.id,
-        kind: schema.resumes.kind,
-        title: schema.resumes.title,
-        fileName: schema.resumes.fileName,
-        mimeType: schema.resumes.mimeType,
-        fileSizeBytes: schema.resumes.fileSizeBytes,
-        rawText: schema.resumes.rawText,
-        parsedJson: schema.resumes.parsedJson,
-        tailoredForJobId: schema.resumes.tailoredForJobId,
-        tailorIntensity: schema.resumes.tailorIntensity,
-        tailorNotes: schema.resumes.tailorNotes,
-        isDefault: schema.resumes.isDefault,
-        createdAt: schema.resumes.createdAt,
-      })
+      .select(publicResumeSelect)
       .from(schema.resumes)
       .where(eq(schema.resumes.userId, session.user.id))
       .orderBy(desc(schema.resumes.createdAt)),
@@ -87,7 +74,7 @@ export default async function ChatPage() {
       .select({
         application: schema.applications,
         job: schema.jobs,
-        resume: schema.resumes,
+        resume: publicResumeSelect,
       })
       .from(schema.applications)
       .innerJoin(schema.jobs, eq(schema.applications.jobId, schema.jobs.id))

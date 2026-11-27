@@ -5,6 +5,8 @@ import { z } from "zod";
 import { getDb, schema } from "@/db";
 import { getServerSession } from "@/lib/session";
 import { tailorResumeWithAI } from "@/lib/ai";
+import { buildPdfFileName, generateTailoredResumePdf } from "@/lib/resume-pdf";
+import { publicResumeSelect } from "@/lib/resume-queries";
 
 const tailorRequestSchema = z.object({
   jobId: z.string().min(1),
@@ -65,16 +67,27 @@ export async function POST(req: NextRequest) {
       intensity,
     });
 
+    const title = `${job.title} — ${job.companyName}`;
+    const pdfFileName = buildPdfFileName(job.companyName, job.title);
+    const pdfBuffer = await generateTailoredResumePdf({
+      title,
+      tailoredText: tailored.tailoredText,
+      candidateName: sourceResume.parsedJson?.fullName || session.user.name,
+      companyName: job.companyName,
+      jobTitle: job.title,
+    });
+
     const [created] = await db
       .insert(schema.resumes)
       .values({
         id: crypto.randomUUID(),
         userId: session.user.id,
         kind: "tailored",
-        title: `${job.title} — ${job.companyName}`,
-        fileName: `${job.companyName.replace(/\s+/g, "_")}_${job.title.replace(/\s+/g, "_")}_Tailored.md`,
-        mimeType: "text/markdown",
-        fileSizeBytes: Buffer.byteLength(tailored.tailoredText, "utf-8"),
+        title,
+        fileName: pdfFileName,
+        mimeType: "application/pdf",
+        fileSizeBytes: pdfBuffer.byteLength,
+        pdfBase64: pdfBuffer.toString("base64"),
         rawText: tailored.tailoredText,
         parsedJson: sourceResume.parsedJson,
         tailoredForJobId: job.id,
@@ -82,7 +95,7 @@ export async function POST(req: NextRequest) {
         tailorNotes: tailored.tailorNotes,
         isDefault: false,
       })
-      .returning();
+      .returning(publicResumeSelect);
 
     // Upsert tracker entry to ready_to_apply if not already applied/interview/offer
     const [existingApp] = await db
@@ -117,7 +130,8 @@ export async function POST(req: NextRequest) {
     }
 
     return NextResponse.json({
-      resume: created,
+      resume: { ...created, hasPdf: true },
+      pdfDownloadUrl: `/api/resumes/${created.id}/pdf`,
       matchedKeywords: tailored.matchedKeywords,
     });
   } catch (error) {

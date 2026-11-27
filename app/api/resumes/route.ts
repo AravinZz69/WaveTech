@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { desc, eq } from "drizzle-orm";
 import { getDb, schema } from "@/db";
 import { getServerSession } from "@/lib/session";
+import { publicResumeSelect } from "@/lib/resume-queries";
 
 export async function GET() {
   const session = await getServerSession();
@@ -12,7 +13,7 @@ export async function GET() {
   try {
     const db = getDb();
     const list = await db
-      .select()
+      .select(publicResumeSelect)
       .from(schema.resumes)
       .where(eq(schema.resumes.userId, session.user.id))
       .orderBy(desc(schema.resumes.createdAt));

@@ -48,6 +48,7 @@ export interface ResumeItem {
   tailoredForJobId: string | null;
   tailorIntensity: string | null;
   tailorNotes: string | null;
+  hasPdf?: boolean;
   isDefault: boolean;
   createdAt: string;
 }
@@ -116,5 +117,5 @@ export type RightPaneMode =
   | { type: "picks" }
   | { type: "job"; jobId: string }
   | { type: "tracker" }
-  | { type: "resumes" }
+  | { type: "resumes"; tab?: "original" | "tailored"; resumeId?: string }
   | { type: "search" };

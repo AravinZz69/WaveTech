@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { getDb, schema } from "@/db";
 import { getServerSession } from "@/lib/session";
+import { publicResumeSelect } from "@/lib/resume-queries";
 
 export async function GET(
   _req: NextRequest,
@@ -16,7 +17,7 @@ export async function GET(
     const { id } = await context.params;
     const db = getDb();
     const [resume] = await db
-      .select()
+      .select(publicResumeSelect)
       .from(schema.resumes)
       .where(
         and(eq(schema.resumes.id, id), eq(schema.resumes.userId, session.user.id))

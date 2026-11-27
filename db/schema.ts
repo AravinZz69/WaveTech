@@ -189,6 +189,7 @@ export const resumes = pgTable(
     fileName: text("file_name").notNull(),
     mimeType: text("mime_type").notNull(),
     fileSizeBytes: integer("file_size_bytes").notNull().default(0),
+    pdfBase64: text("pdf_base64"),
     rawText: text("raw_text").notNull(),
     parsedJson: jsonb("parsed_json").$type<ParsedResumeData>(),
     tailoredForJobId: text("tailored_for_job_id").references(() => jobs.id, {

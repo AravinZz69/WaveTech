@@ -124,6 +124,7 @@ export function CandidateWorkspace({
   const [tailorModalJob, setTailorModalJob] = useState<JobItem | null>(null);
   const [tailorIntensity, setTailorIntensity] = useState<"light" | "balanced" | "deep">("balanced");
   const [tailoring, setTailoring] = useState(false);
+  const [downloadingResumeId, setDownloadingResumeId] = useState<string | null>(null);
 
   const firstName = user.name.split(" ")[0] || "there";
   const savedJobIds = useMemo(
@@ -489,8 +490,51 @@ export function CandidateWorkspace({
     }
   }
 
+  async function handleDownloadTailoredPdf(resume: ResumeItem) {
+    if (resume.kind !== "tailored") {
+      setErrorBanner("PDF download is only available after tailoring your resume.");
+      return;
+    }
+
+    setDownloadingResumeId(resume.id);
+    setErrorBanner(null);
+    try {
+      const res = await fetch(`/api/resumes/${encodeURIComponent(resume.id)}/pdf`);
+      if (!res.ok) {
+        let errMessage = "Failed to download PDF.";
+        try {
+          const errData = (await res.json()) as { error?: string };
+          if (errData.error) errMessage = errData.error;
+        } catch {
+          // Non-JSON error body
+        }
+        setErrorBanner(errMessage);
+        return;
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const downloadName = resume.fileName.toLowerCase().endsWith(".pdf")
+        ? resume.fileName
+        : `${resume.fileName.replace(/\.[^.]+$/, "") || "Tailored_Resume"}.pdf`;
+      link.href = url;
+      link.download = downloadName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      showSuccess(`Downloaded ${downloadName}`);
+    } catch (err) {
+      setErrorBanner(err instanceof Error ? err.message : "Failed to download PDF.");
+    } finally {
+      setDownloadingResumeId((curr) => (curr === resume.id ? null : curr));
+    }
+  }
+
   async function handleTailorResumeSubmit() {
     if (!tailorModalJob || tailoring) return;
+    const targetJob = tailorModalJob;
     setTailoring(true);
     setErrorBanner(null);
     try {
@@ -498,7 +542,7 @@ export function CandidateWorkspace({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          jobId: tailorModalJob.id,
+          jobId: targetJob.id,
           intensity: tailorIntensity,
         }),
       });
@@ -508,11 +552,13 @@ export function CandidateWorkspace({
         return;
       }
 
-      setResumes((prev) => [data.resume, ...prev]);
+      const createdResume = data.resume as ResumeItem;
+      setResumes((prev) => [createdResume, ...prev]);
       await refreshApplications();
-      showSuccess(`Tailored resume created for ${tailorModalJob.companyName}.`);
       setTailorModalJob(null);
-      setRightPane({ type: "resumes" });
+      setRightPane({ type: "resumes", tab: "tailored", resumeId: createdResume.id });
+      showSuccess(`Tailored PDF saved for ${targetJob.companyName}.`);
+      void handleDownloadTailoredPdf(createdResume);
     } catch (err) {
       setErrorBanner(err instanceof Error ? err.message : "Failed to tailor resume.");
     } finally {
@@ -1562,8 +1608,13 @@ export function CandidateWorkspace({
 
               {rightPane.type === "resumes" && (
                 <ResumesPane
+                  key={`${rightPane.tab ?? "original"}-${rightPane.resumeId ?? "none"}`}
                   resumes={resumes}
+                  initialTab={rightPane.tab ?? "original"}
+                  initialOpenResumeId={rightPane.resumeId ?? null}
+                  downloadingId={downloadingResumeId}
                   onUploadResume={(file) => handleUploadResume(file, false)}
+                  onDownloadPdf={handleDownloadTailoredPdf}
                   onClose={() => setRightPane(null)}
                 />
               )}
@@ -1594,7 +1645,7 @@ export function CandidateWorkspace({
                 {tailorModalJob.title} at {tailorModalJob.companyName}
               </h3>
               <p className="text-xs text-zinc-500">
-                Choose how much to change for this role.
+                Choose how much to change for this role. Saves a tailored PDF you can download anytime.
               </p>
             </div>
 
@@ -1657,12 +1708,12 @@ export function CandidateWorkspace({
                 {tailoring ? (
                   <>
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    <span>Tailoring...</span>
+                    <span>Tailoring & generating PDF...</span>
                   </>
                 ) : (
                   <>
                     <Sparkles className="h-3.5 w-3.5" />
-                    <span>Generate tailored resume</span>
+                    <span>Generate tailored PDF</span>
                   </>
                 )}
               </button>

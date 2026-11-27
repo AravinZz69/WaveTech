@@ -4,6 +4,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb, schema } from "@/db";
 import { getServerSession } from "@/lib/session";
+import { publicResumeSelect } from "@/lib/resume-queries";
 
 const createApplicationSchema = z.object({
   jobId: z.string().min(1),
@@ -24,7 +25,7 @@ export async function GET() {
       .select({
         application: schema.applications,
         job: schema.jobs,
-        resume: schema.resumes,
+        resume: publicResumeSelect,
       })
       .from(schema.applications)
       .innerJoin(schema.jobs, eq(schema.applications.jobId, schema.jobs.id))

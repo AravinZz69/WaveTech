@@ -1,20 +1,36 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Check, Copy, FileText, Loader2, Sparkles, Upload, X } from "lucide-react";
+import { Check, Copy, Download, FileText, Loader2, Sparkles, Upload, X } from "lucide-react";
 import type { ResumeItem } from "./types";
+
+function formatFileSize(bytes: number): string {
+  if (!bytes || bytes <= 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
 
 export function ResumesPane({
   resumes,
+  initialTab = "original",
+  initialOpenResumeId = null,
+  downloadingId = null,
   onUploadResume,
+  onDownloadPdf,
   onClose,
 }: {
   resumes: ResumeItem[];
+  initialTab?: "original" | "tailored";
+  initialOpenResumeId?: string | null;
+  downloadingId?: string | null;
   onUploadResume: (file: File) => Promise<void>;
+  onDownloadPdf: (resume: ResumeItem) => Promise<void>;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<"original" | "tailored">("original");
-  const [openResume, setOpenResume] = useState<ResumeItem | null>(null);
+  const [tab, setTab] = useState<"original" | "tailored">(initialTab);
+  const [openResume, setOpenResume] = useState<ResumeItem | null>(() =>
+    initialOpenResumeId ? resumes.find((r) => r.id === initialOpenResumeId) ?? null : null
+  );
   const [uploading, setUploading] = useState(false);
   const [copied, setCopied] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -59,7 +75,7 @@ export function ResumesPane({
               tab === "original" ? "bg-white text-zinc-900 shadow-2xs" : "text-zinc-500"
             }`}
           >
-            Original
+            Original ({originals.length})
           </button>
           <button
             type="button"
@@ -68,7 +84,7 @@ export function ResumesPane({
               tab === "tailored" ? "bg-white text-zinc-900 shadow-2xs" : "text-zinc-500"
             }`}
           >
-            Tailored
+            Tailored ({tailored.length})
           </button>
         </div>
 
@@ -109,16 +125,23 @@ export function ResumesPane({
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3">
-        <p className="text-xs font-medium text-zinc-400">
-          {tab === "original" ? "Your resume" : "Tailored resumes"}
-        </p>
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs font-medium text-zinc-400">
+            {tab === "original" ? "Your resume" : "Tailored PDFs"}
+          </p>
+          {tab === "original" && originals.length > 0 && (
+            <p className="text-[11px] text-zinc-400">
+              PDF export unlocks after tailoring for a role
+            </p>
+          )}
+        </div>
 
         {visibleList.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-zinc-200 p-8 text-center">
             {tab === "tailored" ? (
               <p className="text-xs text-zinc-500 leading-relaxed">
                 Nothing tailored yet. Hit <span className="font-semibold text-zinc-800">Tailor</span>{" "}
-                on a saved job or ask in chat and the version written for that role shows up here.
+                on a saved job or ask in chat to generate a tailored PDF saved to your account.
               </p>
             ) : (
               <p className="text-xs text-zinc-500">
@@ -127,46 +150,68 @@ export function ResumesPane({
             )}
           </div>
         ) : (
-          visibleList.map((r) => (
-            <div
-              key={r.id}
-              className="rounded-2xl border border-zinc-200/80 bg-white p-3.5 sm:p-4 flex items-center justify-between gap-3 min-w-0"
-            >
-              <div className="flex items-start gap-3 min-w-0">
-                <div className="h-9 w-9 rounded-xl bg-[#f4f4f6] flex items-center justify-center shrink-0">
-                  {r.kind === "tailored" ? (
-                    <Sparkles className="h-4 w-4 text-zinc-700" />
-                  ) : (
-                    <FileText className="h-4 w-4 text-zinc-700" />
-                  )}
+          visibleList.map((r) => {
+            const isTailored = r.kind === "tailored";
+            const isDownloading = downloadingId === r.id;
+            const sizeLabel = formatFileSize(r.fileSizeBytes);
+            return (
+              <div
+                key={r.id}
+                className="rounded-2xl border border-zinc-200/80 bg-white p-3.5 sm:p-4 flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 min-w-0"
+              >
+                <div className="flex items-start gap-3 min-w-0 flex-1">
+                  <div className="h-9 w-9 rounded-xl bg-[#f4f4f6] flex items-center justify-center shrink-0">
+                    {isTailored ? (
+                      <Sparkles className="h-4 w-4 text-zinc-700" />
+                    ) : (
+                      <FileText className="h-4 w-4 text-zinc-700" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[13.5px] font-medium text-zinc-900 truncate">{r.title}</p>
+                    <p className="text-xs text-zinc-400 mt-0.5">
+                      {isTailored && r.tailorIntensity
+                        ? `${r.tailorIntensity} tailor · PDF${sizeLabel ? ` (${sizeLabel})` : ""} · `
+                        : "Uploaded "}
+                      {new Date(r.createdAt).toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                      })}
+                    </p>
+                    {r.tailorNotes && (
+                      <p className="text-xs text-zinc-500 mt-1 line-clamp-2">{r.tailorNotes}</p>
+                    )}
+                  </div>
                 </div>
-                <div className="min-w-0">
-                  <p className="text-[13.5px] font-medium text-zinc-900 truncate">{r.title}</p>
-                  <p className="text-xs text-zinc-400 mt-0.5">
-                    {r.kind === "tailored" && r.tailorIntensity
-                      ? `${r.tailorIntensity} tailor · `
-                      : "Uploaded "}
-                    {new Date(r.createdAt).toLocaleDateString("en-US", {
-                      month: "short",
-                      day: "numeric",
-                      year: "numeric",
-                    })}
-                  </p>
-                  {r.tailorNotes && (
-                    <p className="text-xs text-zinc-500 mt-1 line-clamp-2">{r.tailorNotes}</p>
+
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {isTailored && (
+                    <button
+                      type="button"
+                      disabled={isDownloading}
+                      onClick={() => void onDownloadPdf(r)}
+                      className="inline-flex items-center gap-1.5 rounded-xl elip-btn-dark px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+                    >
+                      {isDownloading ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Download className="h-3.5 w-3.5" />
+                      )}
+                      <span>{isDownloading ? "Downloading..." : "Download PDF"}</span>
+                    </button>
                   )}
+                  <button
+                    type="button"
+                    onClick={() => setOpenResume(r)}
+                    className="rounded-xl border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-800 hover:bg-zinc-50 shrink-0"
+                  >
+                    Open
+                  </button>
                 </div>
               </div>
-
-              <button
-                type="button"
-                onClick={() => setOpenResume(r)}
-                className="rounded-xl border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-800 hover:bg-zinc-50 shrink-0"
-              >
-                Open
-              </button>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
 
@@ -178,6 +223,21 @@ export function ResumesPane({
               <p className="text-[11px] text-zinc-500 truncate">{openResume.fileName}</p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              {openResume.kind === "tailored" && (
+                <button
+                  type="button"
+                  disabled={downloadingId === openResume.id}
+                  onClick={() => void onDownloadPdf(openResume)}
+                  className="inline-flex items-center gap-1 rounded-lg elip-btn-dark px-2.5 py-1 text-[11px] font-medium disabled:opacity-50"
+                >
+                  {downloadingId === openResume.id ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Download className="h-3 w-3" />
+                  )}
+                  <span>Download PDF</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => void handleCopyText(openResume.rawText)}

@@ -5,6 +5,7 @@ import { getDb, schema } from "@/db";
 import { getServerSession } from "@/lib/session";
 import { extractResumeRawText, validateResumeFile } from "@/lib/resume-extract";
 import { parseResumeWithAI } from "@/lib/ai";
+import { publicResumeSelect } from "@/lib/resume-queries";
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession();
@@ -65,7 +66,7 @@ export async function POST(req: NextRequest) {
         parsedJson: parsed,
         isDefault: true,
       })
-      .returning();
+      .returning(publicResumeSelect);
 
     const memorySummary = [
       parsed.headline || parsed.roles.join(", "),
