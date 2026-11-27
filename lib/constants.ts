@@ -111,6 +111,3 @@ export const TRACKER_COLUMNS = [
   { id: "offer", label: "Offer", emptyText: "Drag a card here when an offer comes in" },
   { id: "closed", label: "Closed", emptyText: "Archived or rejected applications" },
 ] as const;
-
-export type SearchStatus = (typeof SEARCH_STATUSES)[number];
-export type TrackerStatus = (typeof TRACKER_COLUMNS)[number]["id"];

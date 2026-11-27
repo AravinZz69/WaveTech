@@ -568,6 +568,8 @@ export function CandidateWorkspace({
 
   async function handleSaveProfile(patch: Partial<CandidateProfileItem>) {
     setErrorBanner(null);
+    const previous = profile;
+    setProfile((curr) => ({ ...curr, ...patch }));
     try {
       const res = await fetch("/api/profile", {
         method: "PUT",
@@ -575,6 +577,7 @@ export function CandidateWorkspace({
         body: JSON.stringify(patch),
       });
       if (!res.ok) {
+        setProfile(previous);
         const d = await res.json();
         setErrorBanner(d.error || "Failed to update search preferences.");
         return;
@@ -584,6 +587,7 @@ export function CandidateWorkspace({
       await refreshJobs();
       showSuccess("Search preferences saved.");
     } catch (err) {
+      setProfile(previous);
       setErrorBanner(err instanceof Error ? err.message : "Could not save preferences.");
     }
   }
@@ -1615,6 +1619,7 @@ export function CandidateWorkspace({
                   downloadingId={downloadingResumeId}
                   onUploadResume={(file) => handleUploadResume(file, false)}
                   onDownloadPdf={handleDownloadTailoredPdf}
+                  onOpenPicks={() => setRightPane({ type: "picks" })}
                   onClose={() => setRightPane(null)}
                 />
               )}

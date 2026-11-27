@@ -266,6 +266,15 @@ export async function POST(req: NextRequest) {
         filtersSnapshot: { roles: matchProfile.roles, skills: matchProfile.skills },
         resultCount: topIds.length,
       });
+    } else if (agent.action === "ask_tailor_role") {
+      const topIds = scoredJobs.slice(0, 4).map((j) => j.id);
+      if (topIds.length > 0) {
+        metadata = {
+          type: "picks",
+          jobIds: topIds,
+          followUpPrompt: `Tailor my resume for ${scoredJobs[0].companyName}`,
+        };
+      }
     } else if (agent.action === "show_tailor_card") {
       const targetJob =
         scoredJobs.find((j) => j.id === agent.targetJobId) || focusedJob || scoredJobs[0];

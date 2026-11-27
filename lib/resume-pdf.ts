@@ -12,9 +12,9 @@ export interface ResumePdfInput {
 
 const A4_SIZE: [number, number] = [595.28, 841.89];
 const LETTER_SIZE: [number, number] = [612, 792];
-const MARGIN_X = 42;
-const MARGIN_TOP = 38;
-const MARGIN_BOTTOM = 38;
+const MARGIN_X = 38;
+const MARGIN_TOP = 32;
+const MARGIN_BOTTOM = 30;
 
 // career-ops inspired ATS-safe palette
 const INK_PRIMARY = rgb(0.102, 0.102, 0.18); // #1a1a2e
@@ -239,24 +239,24 @@ class CvPdfCanvas {
   drawSectionHeader(title: string) {
     const clean = sanitizePdfText(title).toUpperCase();
     if (!clean) return;
-    this.y -= 6;
+    this.y -= 4;
     // Keep heading with at least ~2 lines of following body to avoid orphaned titles
-    this.ensureSpace(44);
+    this.ensureSpace(40);
     this.page.drawText(clean, {
       x: MARGIN_X,
       y: this.y,
-      size: 9.8,
+      size: 9.5,
       font: this.bold,
       color: ACCENT_TEAL,
     });
-    this.y -= 4;
+    this.y -= 3.5;
     this.page.drawLine({
       start: { x: MARGIN_X, y: this.y },
       end: { x: MARGIN_X + this.contentWidth, y: this.y },
-      thickness: 0.9,
+      thickness: 0.85,
       color: RULE_LIGHT,
     });
-    this.y -= 11;
+    this.y -= 10;
   }
 
   drawRichText(
@@ -425,6 +425,90 @@ class CvPdfCanvas {
     }
   }
 
+  drawBadgePill(label: string, rightEdgeX: number, y: number): number {
+    const clean = sanitizePdfText(label);
+    if (!clean) return 0;
+    const size = 7.6;
+    const padX = 6;
+    const w = this.bold.widthOfTextAtSize(clean, size) + padX * 2;
+    const h = 13;
+    const x = rightEdgeX - w;
+
+    this.page.drawRectangle({
+      x,
+      y: y - 3,
+      width: w,
+      height: h,
+      color: PILL_BG,
+      borderColor: PILL_BORDER,
+      borderWidth: 0.7,
+    });
+    this.page.drawText(clean, {
+      x: x + padX,
+      y: y + 0.8,
+      size,
+      font: this.bold,
+      color: ACCENT_TEAL,
+    });
+    return w;
+  }
+
+  drawTitleWithRightBadge(leftText: string, badgeLabel?: string) {
+    const cleanLeft = sanitizePdfText(leftText);
+    const leftSize = 9.5;
+    this.ensureSpace(24);
+    let badgeW = 0;
+    if (badgeLabel) {
+      badgeW = this.drawBadgePill(badgeLabel, MARGIN_X + this.contentWidth, this.y) + 8;
+    }
+    const maxW = Math.max(140, this.contentWidth - badgeW);
+    const lines = wrapRichLines(cleanLeft, this.bold, this.bold, leftSize, maxW);
+    const spaceW = this.bold.widthOfTextAtSize(" ", leftSize);
+    lines.forEach((line) => {
+      this.ensureSpace(12.5);
+      let x = MARGIN_X;
+      line.forEach((word, idx) => {
+        if (idx > 0 && word.spaceBefore) x += spaceW;
+        this.page.drawText(word.text, {
+          x,
+          y: this.y,
+          size: leftSize,
+          font: this.bold,
+          color: ACCENT_VIOLET,
+        });
+        x += word.width;
+      });
+      this.y -= 12.2;
+    });
+  }
+
+  drawSubRow(leftBoldText: string, rightMutedText?: string, leftColor = INK_PRIMARY) {
+    const cleanLeft = sanitizePdfText(leftBoldText);
+    const cleanRight = rightMutedText ? sanitizePdfText(rightMutedText) : "";
+    const leftSize = 9;
+    const rightSize = 8.4;
+
+    this.ensureSpace(14);
+    this.page.drawText(cleanLeft, {
+      x: MARGIN_X,
+      y: this.y,
+      size: leftSize,
+      font: this.bold,
+      color: leftColor,
+    });
+    if (cleanRight) {
+      const rw = this.regular.widthOfTextAtSize(cleanRight, rightSize);
+      this.page.drawText(cleanRight, {
+        x: MARGIN_X + this.contentWidth - rw,
+        y: this.y,
+        size: rightSize,
+        font: this.regular,
+        color: INK_MUTED,
+      });
+    }
+    this.y -= 12;
+  }
+
   drawTitleBlock(opts: {
     name: string;
     headline?: string;
@@ -481,59 +565,59 @@ function renderStructuredCv(canvas: CvPdfCanvas, cv: TailoredCvPayload) {
 
   if (cv.summary.trim()) {
     canvas.drawSectionHeader("Professional Summary");
-    canvas.drawRichText(cv.summary, { size: 9.1, lineHeight: 12.8 });
-    canvas.gap(3);
+    canvas.drawRichText(cv.summary, { size: 8.9, lineHeight: 11.8 });
+    canvas.gap(2);
   }
 
   if (cv.competencies.length > 0) {
     canvas.drawSectionHeader("Core Competencies");
     canvas.drawCompetencyPills(cv.competencies);
-    canvas.gap(2);
+    canvas.gap(1);
   }
 
   if (cv.experience.length > 0) {
     canvas.drawSectionHeader("Work Experience");
     cv.experience.forEach((exp, idx) => {
-      const dateStr = [exp.dates, exp.location].filter(Boolean).join("  |  ");
-      canvas.drawHeaderRow(exp.company, dateStr, { leftColor: ACCENT_VIOLET, leftSize: 9.8 });
-      if (exp.role) {
-        canvas.ensureSpace(14);
-        canvas.drawRichText(`**${exp.role}**`, {
-          size: 9.2,
-          lineHeight: 12.5,
-          color: INK_PRIMARY,
-        });
+      canvas.drawHeaderRow(exp.company, exp.dates, { leftColor: ACCENT_VIOLET, leftSize: 9.5 });
+      if (exp.role || exp.location) {
+        canvas.drawSubRow(exp.role || "", exp.location);
       }
       exp.bullets.forEach((b) => {
-        canvas.drawRichText(b, { size: 9, lineHeight: 12.2, bullet: true });
+        canvas.drawRichText(b, { size: 8.8, lineHeight: 11.5, bullet: true });
       });
-      if (idx < cv.experience.length - 1) canvas.gap(4);
+      if (idx < cv.experience.length - 1) canvas.gap(3);
     });
   }
 
   if (cv.projects.length > 0) {
     canvas.drawSectionHeader("Technical Projects");
     cv.projects.forEach((proj, idx) => {
-      const rightLabel = proj.tech || "";
-      const leftLabel = proj.badge ? `${proj.name} — ${proj.badge}` : proj.name;
-      canvas.drawHeaderRow(leftLabel, rightLabel, { leftColor: ACCENT_VIOLET, leftSize: 9.5 });
+      canvas.drawTitleWithRightBadge(proj.name, proj.badge);
       proj.bullets.forEach((b) => {
-        canvas.drawRichText(b, { size: 9, lineHeight: 12.2, bullet: true });
+        canvas.drawRichText(b, { size: 8.8, lineHeight: 11.5, bullet: true });
       });
-      if (idx < cv.projects.length - 1) canvas.gap(3);
+      if (proj.tech) {
+        const cleanTech = proj.tech.replace(/,(\S)/g, ", $1");
+        canvas.drawRichText(`**Tech Stack:** ${cleanTech}`, {
+          size: 8.3,
+          lineHeight: 11,
+          color: INK_MUTED,
+        });
+      }
+      if (idx < cv.projects.length - 1) canvas.gap(2.5);
     });
   }
 
   if (cv.education.length > 0) {
     canvas.drawSectionHeader("Education");
     cv.education.forEach((edu) => {
-      const rightLabel = [edu.location, edu.year].filter(Boolean).join("  |  ");
-      canvas.drawHeaderRow(edu.title, rightLabel, { leftColor: INK_PRIMARY, leftSize: 9.5 });
-      if (edu.org) {
-        canvas.drawRichText(edu.org, { size: 8.9, lineHeight: 12, color: INK_MUTED });
+      canvas.drawHeaderRow(edu.title, edu.year, { leftColor: INK_PRIMARY, leftSize: 9.3 });
+      if (edu.org || edu.location) {
+        const orgLine = [edu.org, edu.location].filter(Boolean).join(" | ");
+        canvas.drawRichText(orgLine, { size: 8.6, lineHeight: 11.2, color: ACCENT_VIOLET });
       }
       if (edu.description) {
-        canvas.drawRichText(edu.description, { size: 8.8, lineHeight: 11.8 });
+        canvas.drawRichText(edu.description, { size: 8.5, lineHeight: 11.2, color: INK_MUTED });
       }
     });
   }
@@ -543,12 +627,12 @@ function renderStructuredCv(canvas: CvPdfCanvas, cv: TailoredCvPayload) {
     cv.certifications.forEach((cert) => {
       const line = [
         `**${cert.title}**`,
-        cert.org ? `— ${cert.org}` : "",
+        cert.org ? `- ${cert.org}` : "",
         cert.year ? `(${cert.year})` : "",
       ]
         .filter(Boolean)
         .join(" ");
-      canvas.drawRichText(line, { size: 8.9, lineHeight: 12.2, bullet: true });
+      canvas.drawRichText(line, { size: 8.6, lineHeight: 11.4, bullet: true });
     });
   }
 
@@ -557,20 +641,21 @@ function renderStructuredCv(canvas: CvPdfCanvas, cv: TailoredCvPayload) {
     cv.awards.forEach((aw) => {
       const line = [
         `**${aw.title}**`,
-        aw.org ? `— ${aw.org}` : "",
+        aw.org ? `- ${aw.org}` : "",
         aw.year ? `(${aw.year})` : "",
       ]
         .filter(Boolean)
         .join(" ");
-      canvas.drawRichText(line, { size: 8.9, lineHeight: 12.2, bullet: true });
+      canvas.drawRichText(line, { size: 8.6, lineHeight: 11.4, bullet: true });
     });
   }
 
   if (cv.skills.length > 0) {
     canvas.drawSectionHeader("Technical Skills");
     cv.skills.forEach((sk) => {
-      const line = sk.category ? `**${sk.category}:** ${sk.items}` : sk.items;
-      canvas.drawRichText(line, { size: 8.9, lineHeight: 12.2 });
+      const cleanItems = sk.items.replace(/,(\S)/g, ", $1");
+      const line = sk.category ? `**${sk.category}:** ${cleanItems}` : cleanItems;
+      canvas.drawRichText(line, { size: 8.6, lineHeight: 11.4 });
     });
   }
 }

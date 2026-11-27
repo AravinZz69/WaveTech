@@ -17,6 +17,7 @@ export function ResumesPane({
   downloadingId = null,
   onUploadResume,
   onDownloadPdf,
+  onOpenPicks,
   onClose,
 }: {
   resumes: ResumeItem[];
@@ -25,6 +26,7 @@ export function ResumesPane({
   downloadingId?: string | null;
   onUploadResume: (file: File) => Promise<void>;
   onDownloadPdf: (resume: ResumeItem) => Promise<void>;
+  onOpenPicks?: () => void;
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<"original" | "tailored">(initialTab);
@@ -137,12 +139,24 @@ export function ResumesPane({
         </div>
 
         {visibleList.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-zinc-200 p-8 text-center">
+          <div className="rounded-2xl border border-dashed border-zinc-200 p-8 text-center space-y-3">
             {tab === "tailored" ? (
-              <p className="text-xs text-zinc-500 leading-relaxed">
-                Nothing tailored yet. Hit <span className="font-semibold text-zinc-800">Tailor</span>{" "}
-                on a saved job or ask in chat to generate a tailored PDF saved to your account.
-              </p>
+              <>
+                <p className="text-xs text-zinc-500 leading-relaxed">
+                  Nothing tailored yet. Hit <span className="font-semibold text-zinc-800">Tailor</span>{" "}
+                  on a saved job or ask in chat to generate a tailored PDF saved to your account.
+                </p>
+                {onOpenPicks && (
+                  <button
+                    type="button"
+                    onClick={onOpenPicks}
+                    className="inline-flex items-center gap-1.5 rounded-xl elip-btn-dark px-3.5 py-2 text-xs font-medium"
+                  >
+                    <Sparkles className="h-3.5 w-3.5" />
+                    <span>Browse picks to tailor</span>
+                  </button>
+                )}
+              </>
             ) : (
               <p className="text-xs text-zinc-500">
                 No resume uploaded yet. Upload a PDF, Word, or image file to get started.

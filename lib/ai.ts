@@ -69,16 +69,59 @@ function extractJsonObject(raw: string): unknown {
     .replace(/^```json\s*/i, "")
     .replace(/^```\s*/i, "")
     .replace(/\s*```$/, "");
+  const tryParse = (candidate: string) => {
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      const noTrailingCommas = candidate.replace(/,\s*([}\]])/g, "$1");
+      return JSON.parse(noTrailingCommas);
+    }
+  };
   try {
-    return JSON.parse(cleaned);
+    return tryParse(cleaned);
   } catch {
     const start = cleaned.indexOf("{");
     const end = cleaned.lastIndexOf("}");
     if (start !== -1 && end > start) {
-      return JSON.parse(cleaned.slice(start, end + 1));
+      return tryParse(cleaned.slice(start, end + 1));
     }
     throw new Error("AI response did not contain valid JSON.");
   }
+}
+
+async function generateJsonWithRetry(
+  ai: GoogleGenAI,
+  operationName: string,
+  contents: string | Array<string | { inlineData: { mimeType: string; data: string } }>,
+  timeoutMs: number,
+  label: string
+): Promise<Record<string, unknown>> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const finalContents =
+      attempt === 0
+        ? contents
+        : Array.isArray(contents)
+        ? [...contents, "\nIMPORTANT: Return strictly valid RFC 8259 JSON with properly escaped quotes and commas."]
+        : `${contents}\nIMPORTANT: Return strictly valid RFC 8259 JSON with properly escaped quotes and commas.`;
+
+    const response = await traceSlowOperation(operationName, () =>
+      withTimeout(
+        ai.models.generateContent({
+          model: DEFAULT_GEMINI_MODEL,
+          contents: finalContents,
+          config: { responseMimeType: "application/json" },
+        }),
+        timeoutMs,
+        label
+      )
+    );
+    try {
+      return extractJsonObject(response.text || "{}") as Record<string, unknown>;
+    } catch (err) {
+      if (attempt === 1) throw err;
+    }
+  }
+  throw new Error("AI response did not contain valid JSON.");
 }
 
 export async function parseResumeWithAI(input: {
@@ -87,6 +130,7 @@ export async function parseResumeWithAI(input: {
   mimeType?: string;
 }): Promise<{ parsed: ParsedResumeData; extractedText: string }> {
   const ai = getGeminiClient();
+  const needsTranscript = input.rawText.trim().length < 200;
 
   const prompt = `You are Wave Tech's career-agent resume parser.
 Extract structured candidate memory and profile fields from the resume.
@@ -112,8 +156,7 @@ Return ONLY valid JSON matching this schema:
   "experience": [{ "company": string, "role": string, "duration": string, "bullets": string[] }],
   "projects": [{ "name": string, "description": string, "tech": string[] }],
   "education": [{ "institution": string, "degree": string, "year": string }],
-  "improvementSuggestions": string[],
-  "plainTextTranscript": string
+  "improvementSuggestions": string[]${needsTranscript ? ',\n  "plainTextTranscript": string' : ""}
 }`;
 
   const contents: Array<string | { inlineData: { mimeType: string; data: string } }> = [];
@@ -122,7 +165,7 @@ Return ONLY valid JSON matching this schema:
     input.fileBuffer &&
     input.mimeType &&
     (input.mimeType.startsWith("image/") ||
-      (input.mimeType === "application/pdf" && input.rawText.length < 200))
+      (input.mimeType === "application/pdf" && needsTranscript))
   ) {
     contents.push({
       inlineData: {
@@ -138,22 +181,13 @@ Return ONLY valid JSON matching this schema:
       : prompt
   );
 
-  const response = await traceSlowOperation("gemini_parse_resume", () =>
-    withTimeout(
-      ai.models.generateContent({
-        model: DEFAULT_GEMINI_MODEL,
-        contents,
-        config: {
-          responseMimeType: "application/json",
-        },
-      }),
-      45000,
-      "Gemini resume parsing"
-    )
+  const rawObj = await generateJsonWithRetry(
+    ai,
+    "gemini_parse_resume",
+    contents,
+    45000,
+    "Gemini resume parsing"
   );
-
-  const text = response.text || "{}";
-  const rawObj = extractJsonObject(text) as Record<string, unknown>;
   const parsed = parsedResumeSchema.parse(rawObj);
   const transcript =
     typeof rawObj.plainTextTranscript === "string" && rawObj.plainTextTranscript.trim()
@@ -345,11 +379,10 @@ export async function tailorResumeWithAI(input: {
       ? "Deep tailor: rewrite summary and bullet phrasing using the exact JD vocabulary to foreground directly relevant systems and quantified impact without fabricating anything."
       : "Balanced tailor: refine headline, 3-line summary, competencies, and top project/experience bullets using honest JD-aligned framing.";
 
-  const response = await traceSlowOperation("gemini_tailor_resume", () =>
-    withTimeout(
-      ai.models.generateContent({
-        model: DEFAULT_GEMINI_MODEL,
-        contents: `You are Wave Tech's ATS-optimized resume architect (following strict factual integrity & 6-second recruiter scan rules).
+  const obj = (await generateJsonWithRetry(
+    ai,
+    "gemini_tailor_resume",
+    `You are Wave Tech's ATS-optimized resume architect (following strict factual integrity & 6-second recruiter scan rules).
 STRICT FACT GATE:
 - NEVER invent employers, titles, dates, degrees, certifications, metrics, numbers, or skills absent from the Candidate Original Resume.
 - Only reformulate verified experience using JD vocabulary (e.g., bold key verified numbers/metrics using **40%** or **sub-200ms**).
@@ -382,7 +415,7 @@ Return ONLY valid JSON:
       "portfolio": "Portfolio URL if in resume"
     },
     "summary": "Crisp 3-line tailored summary answering target role fit + strongest verified proof (use **bold** for 2-3 key metrics/phrases).",
-    "competencies": ["6 to 8 high-signal verified JD competency phrases from candidate background"],
+    "competencies": ["6 concise (2-4 word) verified JD competency phrases"],
     "experience": [
       {
         "company": "Company Name",
@@ -416,14 +449,9 @@ Return ONLY valid JSON:
   "tailorNotes": "Short 2-3 sentence summary of what was tailored, top matched keywords, and any real skill gaps.",
   "matchedKeywords": ["list of verified JD keywords highlighted"]
 }`,
-        config: { responseMimeType: "application/json" },
-      }),
-      45000,
-      "Gemini resume tailoring"
-    )
-  );
-
-  const obj = extractJsonObject(response.text || "{}") as {
+    45000,
+    "Gemini resume tailoring"
+  )) as {
     structuredCv?: Partial<TailoredCvPayload>;
     tailoredText?: string;
     tailorNotes?: string;
